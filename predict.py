@@ -1,4 +1,6 @@
 import argparse
+import os
+import subprocess
 import sys
 from pathlib import Path
 import cv2
@@ -6,9 +8,31 @@ from ultralytics import YOLO
 
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm"}
 
+def convert_to_h264(input_path, output_path):
+    """
+    Convert video to H.264 / YUV420p for 100% compatibility with LinkedIn, browsers, and social media.
+    """
+    try:
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        cmd = [
+            ffmpeg_exe, "-y",
+            "-i", str(input_path),
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-profile:v", "main",
+            "-movflags", "+faststart",
+            str(output_path)
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return result.returncode == 0
+    except Exception as e:
+        print(f"  [Notice] H.264 conversion skipped: {e}")
+        return False
+
 def run_inference(source, model_path="best.pt", conf=0.25, save=True, show=False, project="output", name="results", exist_ok=True):
     """
-    Run object detection inference using the trained YOLO model with native MP4 video saving.
+    Run object detection inference using the trained YOLO model with LinkedIn/Web compatible MP4 video saving.
     """
     print(f"Loading model: {model_path} ...")
     model = YOLO(model_path)
@@ -32,14 +56,16 @@ def run_inference(source, model_path="best.pt", conf=0.25, save=True, show=False
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        output_video_path = out_dir / f"{source_path.stem}_detected.mp4"
+        final_output_video = out_dir / f"{source_path.stem}_detected.mp4"
+        raw_temp_video = out_dir / f"temp_{source_path.stem}_raw.mp4"
+
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(output_video_path), fourcc, fps, (width, height)) if save else None
+        writer = cv2.VideoWriter(str(raw_temp_video), fourcc, fps, (width, height)) if save else None
 
         frame_idx = 0
         detection_count = 0
 
-        print(f"Processing {total_frames} frames -> Output: {output_video_path} (Format: MP4, {fps:.1f} FPS, {width}x{height})")
+        print(f"Processing {total_frames} frames -> Target Output: {final_output_video} (Format: MP4 H.264, {fps:.1f} FPS, {width}x{height})")
 
         while cap.isOpened():
             ret, frame = cap.read()
@@ -72,13 +98,22 @@ def run_inference(source, model_path="best.pt", conf=0.25, save=True, show=False
         if show:
             cv2.destroyAllWindows()
 
+        # Convert to standard H.264 (YUV420p) for LinkedIn / Browser support
+        if save and raw_temp_video.exists():
+            print("Encoding video to web/LinkedIn-ready H.264 MP4 format...")
+            success = convert_to_h264(raw_temp_video, final_output_video)
+            if success:
+                raw_temp_video.unlink(missing_ok=True)
+            else:
+                raw_temp_video.rename(final_output_video)
+
         print("\n" + "=" * 50)
         print("VIDEO PROCESSING COMPLETE")
         print("=" * 50)
         print(f"Total Frames Processed: {frame_idx}")
         print(f"Total Sign Detections: {detection_count}")
         if save:
-            print(f"[+] Output MP4 video saved to: {output_video_path}")
+            print(f"[+] Output LinkedIn-Ready MP4 video saved to: {final_output_video}")
 
     else:
         # Images, directory, or webcam
@@ -139,5 +174,6 @@ if __name__ == "__main__":
         save=not args.no_save,
         show=args.show
     )
+
 
 
